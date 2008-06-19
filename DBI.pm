@@ -18,7 +18,7 @@ use constant {
     REFCOUNT_IDENTIFIER => "queries",
 };
 
-our $VERSION = 0.01;
+our $VERSION = 0.011;
 
 sub new {
     my ($class, %args) = @_;
@@ -149,6 +149,8 @@ sub query_database {
     $sth->execute(@args);
 
     if ($action eq "do") {
+        $sth->finish;
+        $dbh->commit;
         return $id, $caller, $cb;
     }
     elsif ($action eq "query") {
@@ -168,6 +170,9 @@ sub query_database {
         }
 
         DEBUG && warn "returnning to caller";
+
+        $sth->finish;
+        $dbh->commit;
 
         # This is automatically placed in a shared array, as per
         # PoCo::Thread::Pool
@@ -378,6 +383,10 @@ Some types of data sharing in ithreads have been known to leak,
 
 My tests have shown this component, as well as POE::Component::Pool::Thread,
 does not work with the forks pragma.
+
+=item *
+
+This module doesn't particularly support transactional operations.
 
 =back
 
