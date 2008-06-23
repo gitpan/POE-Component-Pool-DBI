@@ -18,7 +18,7 @@ use constant {
     REFCOUNT_IDENTIFIER => "queries",
 };
 
-our $VERSION = 0.011;
+our $VERSION = 0.012;
 
 sub new {
     my ($class, %args) = @_;
@@ -150,7 +150,6 @@ sub query_database {
 
     if ($action eq "do") {
         $sth->finish;
-        $dbh->commit;
         return $id, $caller, $cb;
     }
     elsif ($action eq "query") {
@@ -172,7 +171,6 @@ sub query_database {
         DEBUG && warn "returnning to caller";
 
         $sth->finish;
-        $dbh->commit;
 
         # This is automatically placed in a shared array, as per
         # PoCo::Thread::Pool
