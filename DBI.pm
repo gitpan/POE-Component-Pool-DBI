@@ -18,7 +18,7 @@ use constant {
     REFCOUNT_IDENTIFIER => "queries",
 };
 
-our $VERSION = 0.012;
+our $VERSION = 0.014;
 
 sub new {
     my ($class, %args) = @_;
@@ -27,9 +27,6 @@ sub new {
 
     # For tracking the job id.
     $self->{current_id} = 0;
-
-    use Data::Dumper;
-    print Dumper($self);
 
     print "Connections: $args{connections}";
 
@@ -125,57 +122,65 @@ sub query_database {
     # object.  (perl threads are strange that way).
     my ($action, $dsn, $user, $pass, $id, $caller, $cb, $query, @args) = @_;
 
-    DEBUG && warn "testing & creating database connection";
-
-    # "our" is a shared variable, but it's only shared within each thread
-    # (assuming that crunch_data is never called outside a thread).  This
-    # statement will call DBI->connect if, and only if, the $dbh is not defined
-    # and you cannot call $dbh->ping if it is defined.
-    #
-    # I do this rather than connect_cached, just incase any initialized
-    # connections were made before the ithread was created.  This mechanism
-    # provides a bit more safety in terms of ensuring that we get a unique
-    # connection per thread.
-    our $dbh = DBI->connect($dsn, $user, $pass)
-        unless defined $dbh && $dbh->ping;
-
-    DEBUG && warn "preparing query";
-    # prepare_cached should be safe, since we should have a unique connection
-    # per our previous statement, and my tests showed this optimizes querying
-    # by up to 8x over creating a new prepared statement each time.
-    my $sth = $dbh->prepare_cached($query);
-
-    DEBUG && warn "executing query";
-    $sth->execute(@args);
-
-    if ($action eq "do") {
-        $sth->finish;
-        return $id, $caller, $cb;
-    }
-    elsif ($action eq "query") {
-        DEBUG && warn "fetching results";
-        my $results = $sth->fetchall_arrayref({});
-        my @response;
-
-        for my $record (@$results) {
-            # Create a shared hashref.
-            my $r = &share({});
-
-            # Copy all values into the hashref.
-            @$r{keys %$record} = values %$record;
-
-            # Put the shared hashref into the response
-            push @response, $r;
+    my @response = eval {
+        DEBUG && warn "testing & creating database connection";
+    
+        # "our" is a shared variable, but it's only shared within each thread
+        # (assuming that crunch_data is never called outside a thread).  This
+        # statement will call DBI->connect if, and only if, the $dbh is not defined
+        # and you cannot call $dbh->ping if it is defined.
+        #
+        # I do this rather than connect_cached, just incase any initialized
+        # connections were made before the ithread was created.  This mechanism
+        # provides a bit more safety in terms of ensuring that we get a unique
+        # connection per thread.
+        our $dbh = DBI->connect($dsn, $user, $pass)
+            unless defined $dbh && $dbh->ping;
+    
+        DEBUG && warn "preparing query";
+        # prepare_cached should be safe, since we should have a unique connection
+        # per our previous statement, and my tests showed this optimizes querying
+        # by up to 8x over creating a new prepared statement each time.
+        my $sth = $dbh->prepare_cached($query);
+    
+        DEBUG && warn "executing query";
+        $sth->execute(@args);
+    
+        if ($action eq "do") {
+            $sth->finish;
+            return $id, $caller, $cb;
         }
-
-        DEBUG && warn "returnning to caller";
-
-        $sth->finish;
-
-        # This is automatically placed in a shared array, as per
-        # PoCo::Thread::Pool
-        return $id, $caller, $cb, @response;
+        elsif ($action eq "query") {
+            DEBUG && warn "fetching results";
+            my $results = $sth->fetchall_arrayref({});
+            my @response;
+    
+            for my $record (@$results) {
+                # Create a shared hashref.
+                my $r = &share({});
+    
+                # Copy all values into the hashref.
+                @$r{keys %$record} = values %$record;
+    
+                # Put the shared hashref into the response
+                push @response, $r;
+            }
+    
+            DEBUG && warn "returnning to caller";
+    
+            $sth->finish;
+    
+            # This is automatically placed in a shared array, as per
+            # PoCo::Thread::Pool
+            return @response;
+        }
+    };
+    if ($@) {
+        warn "An unexpected error was trapped while trying to run a query: $@";
+        warn "The query was: $query";
     }
+
+    return $id, $caller, $cb, @response;
 }
 
 # This component will send a message to the caller session, with the data
@@ -221,17 +226,17 @@ use POE qw( Component::Pool::DBI );
              my ($kernel, $heap) = @_[ KERNEL, HEAP ];
  
              my $dbpool = POE::Component::Pool::DBI->new(
-                 MaxConnections  => 10,
-                 DSN             => "DBI:mysql:database=test",
-                 Username        => "username",
-                 Password        => "password"
+                 connections     => 10,
+                 dsn             => "DBI:mysql:database=test",
+                 username        => "username",
+                 password        => "password"
              );
  
              # Outstanding queries keep the calling session alive.
              $dbpool->query(
                  callback => "handle_result",
                  query    => "select foo from bar where foo = ?",
-                 args     => [ "foo" ],
+                 params   => [ "foo" ],
                  userdata => "example"
              );
 
@@ -329,7 +334,7 @@ The query argument holds the SQL or PL/SQL statement to execute.  The statement
 will be invoked immediately, but it will be cached within the connection
 (see L<DBI> prepare_cached).
 
-=item args
+=item params
 
 The arguments to provide to DBI's execute method (see L<DBI>).
 

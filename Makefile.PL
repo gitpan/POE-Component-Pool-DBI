@@ -15,6 +15,7 @@ WriteMakefile
 
     PREREQ_PM    => {
         POE      => 0.30,
+        'POE::Component::Pool::Thread'      => 0.015,
         threads  => 1.03,
     },
 
